@@ -1,6 +1,6 @@
-# Retry Module
+# Retry Service
 
-A TypeScript utility for managing retry logic in asynchronous operations with comprehensive testing.
+A TypeScript utility for managing retry logic in asynchronous operations with robust error handling.
 
 ## Features
 
@@ -10,6 +10,7 @@ A TypeScript utility for managing retry logic in asynchronous operations with co
 - Conditional retrying based on errors or results
 - Detailed reporting on retry attempts
 - Error sanitization for logging
+- Works with any error handling pattern (try/catch, Result/Either patterns, etc.)
 
 ## Setup
 
@@ -26,7 +27,16 @@ npm test
 
 # Run tests in watch mode
 npm run test:watch
+
+# Run examples
+npm run example
+npm run example:data-error
 ```
+
+## Requirements
+
+- Node.js v16+ (tested with v20.16.0)
+- TypeScript 5.7+
 
 ## Environment Variables
 
@@ -37,10 +47,25 @@ npm run test:watch
   - `warn`: Shows only warnings and errors
   - `error`: Shows only errors
 
-## Usage Example
+## Core Concepts
+
+### RetryService
+
+The RetryService provides flexible retry functionality for asynchronous operations, allowing you to:
+
+- Set the number of retry attempts
+- Configure delay between attempts
+- Apply exponential backoff
+- Set timeout limits
+- Conditionally retry based on errors or results
+- Receive detailed reports of retry attempts
+
+## Usage Examples
+
+### Basic Retry
 
 ```typescript
-import { retryService } from "./src/Retry.service";
+import { retryService } from "./src/retry-service/Retry.service";
 
 // Basic usage
 const result = await retryService.retry(
@@ -53,36 +78,91 @@ const result = await retryService.retry(
     delay: 100,
   }
 );
+```
 
-// Using with exponential backoff
+### With Conditional Retrying
+
+```typescript
 const result = await retryService.retry(
   async () => {
-    // Your async function here
-    return "success";
+    const response = await fetchData("resource-123");
+    return response;
   },
   {
     retries: 3,
-    delay: 100,
+    delay: 1000,
     exponentialBackoff: true,
-  }
-);
-
-// With conditional retrying
-const result = await retryService.retry(
-  async () => {
-    // Your async function here
-    return { status: "pending" };
-  },
-  {
-    retries: 5,
-    delay: 100,
-    retryOnResult: (result) => result.status === "pending",
-    timeout: 30000, // 30 seconds timeout
+    // Retry based on the result
+    retryOnResult: (result) => {
+      return result.status === "PENDING";
+    },
+    // Retry based on error type
+    retryOnError: (error) => {
+      return error.name === "NetworkError" || error.message.includes("timeout");
+    },
+    // Get a report when complete
     onComplete: (report) => {
-      console.log(`Retry completed after ${report.attempts} attempts`);
+      console.log(`Operation completed after ${report.attempts} attempts`);
     },
   }
 );
+```
+
+### With Result/Either Pattern (Example with DataErrorPayload)
+
+This example shows how to use the retry service with a Result/Either pattern implementation called DataErrorPayload, which is included in the example code. This pattern is similar to Rust's Result or Haskell's Either types:
+
+```typescript
+import { retryService } from "./src/retry-service/Retry.service";
+import DataErrorPayloadUtil from "./src/util/data-error-payload/DataErrorPayload.utils";
+import { DataErrorPayload } from "./src/util/data-error-payload/types/data-error-payload.types";
+
+// Function that returns a Result type
+async function fetchData(
+  id: string
+): Promise<DataErrorPayload<UserData, Error>> {
+  try {
+    // API call or other operation
+    const data = await api.getUser(id);
+    return DataErrorPayloadUtil.create(data); // Ok variant
+  } catch (error) {
+    return DataErrorPayloadUtil.createErr(
+      error instanceof Error ? error : new Error(String(error))
+    ); // Err variant
+  }
+}
+
+// Using with retry and a Result pattern
+const result = await retryService.retry(
+  async () => {
+    const response = await fetchData("user-123");
+    return response;
+  },
+  {
+    retries: 3,
+    delay: 1000,
+    exponentialBackoff: true,
+    retryOnResult: (result) => {
+      // Check if result is an error and decide whether to retry
+      return (
+        DataErrorPayloadUtil.isErr(result) &&
+        result.error.message === "Resource temporarily unavailable"
+      );
+    },
+    onComplete: (report) => {
+      console.log(`Operation completed after ${report.attempts} attempts`);
+    },
+  }
+);
+
+// Process the result
+if (DataErrorPayloadUtil.isOk(result)) {
+  const data = DataErrorPayloadUtil.extractOkPayload(result);
+  console.log("Success:", data);
+} else {
+  const error = DataErrorPayloadUtil.extractErrorPayload(result);
+  console.error("Failed:", error.message);
+}
 ```
 
 ## Configuration Options
@@ -98,3 +178,10 @@ The `RetryOptions` interface provides the following configuration options:
 - `onComplete`: Callback function executed when retry process completes
 - `sanitizeRetryReasons`: Controls object sanitization in retry reports (default: true)
 - `sanitizationThreshold`: Size threshold in characters for sanitization (default: 500)
+
+## See Also
+
+For full examples, see:
+
+- `src/example.ts` - Basic retry examples
+- `src/data-error-payload-example.ts` - Examples using a Result/Either pattern implementation
